@@ -88,6 +88,9 @@ grabber()
             exit(1);
         }
     }
+    cv::namedWindow("frames", CV_WINDOW_NORMAL);
+    const int div = 10;
+    cv::resizeWindow("frames", 1920 / div, 1080 / div);
 
     // main job here
 
@@ -124,8 +127,8 @@ main()
         const int id = mats_next();
         // turn on following 2 lines to see frames
         cv::imshow("frames", matBuf[id]);
-        cv::waitKey(1);
         mats_free(id);
+        cv::waitKey(1);
     }
     auto end = high_resolution_clock::now();
     duration<double> timeSpent = duration_cast<duration<double> >(end - start);
@@ -135,7 +138,7 @@ main()
 
     // stop the thread
     isTerm = true;
-    mats_free(-1); // add a invalid handle to wakeup thread
+    mats_free(-1); // add an invalid handle to wakeup thread
     th.join();
 
     return 0;
