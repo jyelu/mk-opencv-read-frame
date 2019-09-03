@@ -1,4 +1,5 @@
 #include <opencv2/opencv.hpp>
+#include <chrono>
 #include <iostream>
 
 #include <sys/types.h>
@@ -7,78 +8,79 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/mman.h>
 
-
-void
-write_all(int fd, const void * buf, size_t count)
-{
-    const unsigned char * p = (const unsigned char *) buf;
-    while (count > 0) {
-        ssize_t len = count;
-        if (len > 8192) len = 8192;
-        len = write(fd, p, len);
-        if (len < 0) {
-            perror("frame save");
-            exit(1);
-        }
-        count -= len;
-        p += len;
-    }
-}
 
 int
 main()
 {
     // open image-store as frames buffer
-    int fd = open("../image-store", O_CREAT | O_TRUNC | O_RDWR, 0666);
+    int fd = open("../image-store", O_RDONLY);
     if (fd == -1) {
         std::cerr << "fail to open image store" << std::endl;
         return 1;
     }
 
-    cv::VideoCapture cap;
-    cap.open("../FILE190620-070756.MP4");
-
-    cv::Mat mat;
-    if (!cap.read(mat)) {
-        std::cerr << "fail to read frames" << std::endl;
+    off_t filesize = lseek(fd, 0, SEEK_END);
+    if (filesize == (off_t) -1) {
+        perror("store size");
         return 1;
     }
-    // save the metadata of Mat
-    const int type = mat.type();
-    write_all(fd, &type, sizeof(type));
-    const int rows = mat.rows;
-    write_all(fd, &rows, sizeof(rows));
-    const int cols = mat.cols;
-    write_all(fd, &cols, sizeof(cols));
-    const int step = mat.step;
-    write_all(fd, &step, sizeof(step));
 
-    const int bufSize = step * rows;
-    write_all(fd, &bufSize, sizeof(bufSize));
-    const int pad = 0;
-    write_all(fd, &pad, sizeof(pad));
-    write_all(fd, &pad, sizeof(pad));
-    write_all(fd, &pad, sizeof(pad));
+    void * map = mmap(NULL, filesize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        perror("map store");
+        return 1;
+    }
+    // close fd when mmap done
+    close(fd);
 
+    // load the metadata of Mat
+    const int * p = (const int *) map;
+    const int type = *p++;
+    const int rows = *p++;
+    const int cols = *p++;
+    const int step = *p++;
+
+    const int bufSize = *p++;
+    // padding
+    ++p; ++p; ++p;
+
+    // load frames
     size_t count = 0;
-    // save frame
-    write_all(fd, mat.data, bufSize);
-    count += bufSize;
+    unsigned char * b = (unsigned char *) p;
 
     // size limit
     const size_t FILE_LIMIT = 1500000000; // 1.5 GB
-    while (count < FILE_LIMIT) {
-        if (!cap.read(mat)) {
-            std::cerr << "fail to read frames" << std::endl;
-            return 1;
-        }
+    // create Mat by loading data from 'b'
+    cv::Mat mat(rows, cols, type, b, step);
+    
+    // timing
+    using namespace std::chrono;
+    auto start = high_resolution_clock::now();
+    int testCount = 0;
+    long sum = 0;
 
-        write_all(fd, mat.data, bufSize);
+    while (count < FILE_LIMIT) {
+        mat.data = b;
         count += bufSize;
+        for (int i = 0; i < bufSize; ++i) {
+            sum += *b; // read dummy
+            ++b;
+        }
+        // cv::imshow("frames", mat);
+        // b += bufSize;
+        // unsigned char dummy = *b; // read at first
+        // cv::waitKey(1);
+        ++testCount;
     }
 
-    // close image-store
-    close(fd);
+    auto end = high_resolution_clock::now();
+    duration<double> timeSpent = duration_cast<duration<double> >(end - start);
+    std::cout << "average load time: "
+        << timeSpent.count() * 1000. / testCount << " ms"
+        << std::endl
+        << testCount << " frames, sum = " << sum << std::endl;
+
     return 0;
 }
